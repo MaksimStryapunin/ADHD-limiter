@@ -1,6 +1,9 @@
+#define NOMINMAX
+#define WIN32_LEAN_AND_MEAN
 #include <windows.h>
 
 #include <algorithm>
+#include <iterator>
 #include <string>
 
 namespace {
@@ -12,15 +15,15 @@ enum class TimerState { Idle, Running, AwaitingConfirm };
 enum class Phase { Work, Rest };
 
 struct AppState {
-    HWND workEdit = nullptr;
     HWND restEdit = nullptr;
+    HWND workEdit = nullptr;
     HWND actionButton = nullptr;
 
     HFONT numberFont = nullptr;
     HFONT symbolFont = nullptr;
 
-    HBRUSH workBrush = nullptr;
     HBRUSH restBrush = nullptr;
+    HBRUSH workBrush = nullptr;
 
     TimerState state = TimerState::Idle;
     Phase phase = Phase::Work;
@@ -115,26 +118,26 @@ void AdvancePhase(HWND hwnd) {
 void ResizeControls(HWND hwnd, int width, int height) {
     auto& app = GetState(hwnd);
 
-    const int margin = std::max(12, width / 30);
-    const int top = std::max(16, height / 5);
-    const int editHeight = std::max(40, height / 4);
-    const int gap = std::max(30, width / 10);
-    const int editWidth = std::max(90, (width - gap - margin * 2) / 2);
+    const int margin = (std::max)(12, width / 30);
+    const int top = (std::max)(16, height / 5);
+    const int editHeight = (std::max)(40, height / 4);
+    const int gap = (std::max)(30, width / 10);
+    const int editWidth = (std::max)(90, (width - gap - margin * 2) / 2);
 
     const int leftX = margin;
     const int rightX = width - margin - editWidth;
 
-    MoveWindow(app.workEdit, leftX, top, editWidth, editHeight, TRUE);
-    MoveWindow(app.restEdit, rightX, top, editWidth, editHeight, TRUE);
+    MoveWindow(app.restEdit, leftX, top, editWidth, editHeight, TRUE);
+    MoveWindow(app.workEdit, rightX, top, editWidth, editHeight, TRUE);
 
-    const int buttonWidth = std::max(90, width / 5);
-    const int buttonHeight = std::max(45, height / 8);
+    const int buttonWidth = (std::max)(90, width / 5);
+    const int buttonHeight = (std::max)(45, height / 8);
     const int buttonX = (width - buttonWidth) / 2;
-    const int buttonY = std::max(top + editHeight + 24, height - buttonHeight - margin);
+    const int buttonY = (std::max)(top + editHeight + 24, height - buttonHeight - margin);
     MoveWindow(app.actionButton, buttonX, buttonY, buttonWidth, buttonHeight, TRUE);
 
-    const int numberFontHeight = -std::max(22, editHeight / 2);
-    const int symbolFontHeight = -std::max(24, std::min(64, height / 8));
+    const int numberFontHeight = -(std::max)(22, editHeight / 2);
+    const int symbolFontHeight = -(std::max)(24, (std::min)(64, height / 8));
 
     if (app.numberFont != nullptr) {
         DeleteObject(app.numberFont);
@@ -168,13 +171,13 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lPara
         }
         case WM_CREATE: {
             auto& app = GetState(hwnd);
-            app.workEdit = CreateWindowExW(
+            app.restEdit = CreateWindowExW(
                 WS_EX_CLIENTEDGE, L"EDIT", L"20",
                 WS_CHILD | WS_VISIBLE | ES_CENTER | ES_AUTOHSCROLL,
                 0, 0, 0, 0, hwnd, reinterpret_cast<HMENU>(1001),
                 reinterpret_cast<LPCREATESTRUCTW>(lParam)->hInstance, nullptr);
 
-            app.restEdit = CreateWindowExW(
+            app.workEdit = CreateWindowExW(
                 WS_EX_CLIENTEDGE, L"EDIT", L"20",
                 WS_CHILD | WS_VISIBLE | ES_CENTER | ES_AUTOHSCROLL,
                 0, 0, 0, 0, hwnd, reinterpret_cast<HMENU>(1002),
@@ -242,15 +245,15 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lPara
             HDC hdc = reinterpret_cast<HDC>(wParam);
             HWND control = reinterpret_cast<HWND>(lParam);
             SetBkMode(hdc, OPAQUE);
-            if (control == app.workEdit) {
+            if (control == app.restEdit) {
                 SetTextColor(hdc, RGB(0, 128, 0));
                 SetBkColor(hdc, RGB(216, 255, 216));
-                return reinterpret_cast<INT_PTR>(app.workBrush);
+                return reinterpret_cast<INT_PTR>(app.restBrush);
             }
-            if (control == app.restEdit) {
+            if (control == app.workEdit) {
                 SetTextColor(hdc, RGB(180, 0, 0));
                 SetBkColor(hdc, RGB(255, 216, 216));
-                return reinterpret_cast<INT_PTR>(app.restBrush);
+                return reinterpret_cast<INT_PTR>(app.workBrush);
             }
             break;
         }

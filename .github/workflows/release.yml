@@ -2,19 +2,30 @@ name: Release
 
 on:
   push:
-    tags:
-      - 'v*'
-  workflow_dispatch:
+    tags: ['v*']
+
+permissions:
+  contents: write
 
 jobs:
-  build-and-release:
-    runs-on: windows-latest
-    permissions:
-      contents: write
+  package:
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            platform: Windows-x64
+            archive: ADHD-limiter-Windows-x64.zip
+          - os: ubuntu-latest
+            platform: Linux-x64
+            archive: ADHD-limiter-Linux-x64.tar.gz
+          - os: macos-latest
+            platform: macOS-x64
+            archive: ADHD-limiter-macOS-x64.tar.gz
 
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
       - name: Configure
         run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
@@ -22,12 +33,48 @@ jobs:
       - name: Build
         run: cmake --build build --config Release
 
-      - name: Package (ZIP + TGZ)
-        run: cpack --config build/CPackConfig.cmake
+      - name: Package Windows
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force artifacts | Out-Null
+          Copy-Item build/Release/ADHD-limiter.exe artifacts/ADHD-limiter.exe
+          Compress-Archive -Path artifacts/ADHD-limiter.exe -DestinationPath artifacts/${{ matrix.archive }}
 
-      - name: Create release with archives
+      - name: Package Unix
+        if: runner.os != 'Windows'
+        run: |
+          mkdir -p artifacts/package
+          cp build/ADHD-limiter artifacts/package/ADHD-limiter
+          chmod +x artifacts/package/ADHD-limiter
+          tar -czf "artifacts/${{ matrix.archive }}" -C artifacts/package ADHD-limiter
+
+      - name: Upload package
+        uses: actions/upload-artifact@v4
+        with:
+          name: package-${{ matrix.platform }}
+          path: artifacts/${{ matrix.archive }}
+          if-no-files-found: error
+
+  release:
+    needs: package
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download packages
+        uses: actions/download-artifact@v4
+        with:
+          pattern: package-*
+          path: artifacts
+          merge-multiple: true
+
+      - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          files: |
-            build/*.zip
-            build/*.tar.gz
+          name: ADHD-limiter ${{ github.ref_name }}
+          body: |
+            Beta release of ADHD-limiter.
+
+            Windows contains the native WinAPI timer GUI. Linux and macOS currently contain the cross-platform build stub; a native GUI backend is planned for a later beta.
+          files: artifacts/*
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
