@@ -71,6 +71,7 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           name: ADHD-limiter ${{ github.ref_name }}
+          prerelease: true
           body: |
             Исправлена кодировка, улучшен UI, добавлены кнопки паузы/сброса, добавлен звук, статическая линковка CRT.
 
