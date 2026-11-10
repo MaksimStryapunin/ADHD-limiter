@@ -5,25 +5,28 @@
 #include <algorithm>
 #include <iterator>
 #include <string>
+#include <mmsystem.h>
 
 namespace {
 constexpr UINT_PTR kTimerId = 1;
 constexpr int kMinMinutes = 1;
 constexpr int kMaxMinutes = 720;
+constexpr int kDefaultMinutes = 20;
 
-enum class TimerState { Idle, Running, AwaitingConfirm };
+enum class TimerState { Idle, Running, Paused, AwaitingConfirm };
 enum class Phase { Work, Rest };
 
 struct AppState {
     HWND restEdit = nullptr;
     HWND workEdit = nullptr;
     HWND actionButton = nullptr;
+    HWND pauseButton = nullptr;
+    HWND resetButton = nullptr;
 
     HFONT numberFont = nullptr;
     HFONT symbolFont = nullptr;
 
-    HBRUSH restBrush = nullptr;
-    HBRUSH workBrush = nullptr;
+    HBRUSH backgroundBrush = nullptr;
 
     TimerState state = TimerState::Idle;
     Phase phase = Phase::Work;
@@ -58,9 +61,14 @@ void UpdateButton(HWND hwnd) {
     auto& app = GetState(hwnd);
     const wchar_t* text = L"▶";
     if (app.state == TimerState::AwaitingConfirm) {
-        text = L"⏭|";
+        text = L"✓";
     }
     SetWindowTextW(app.actionButton, text);
+
+    const wchar_t* pauseText = app.state == TimerState::Paused ? L"▶" : L"||";
+    SetWindowTextW(app.pauseButton, pauseText);
+    EnableWindow(app.pauseButton, app.state == TimerState::Running ||
+                                      app.state == TimerState::Paused);
 }
 
 void UpdateWindowTitle(HWND hwnd) {
@@ -82,6 +90,11 @@ void UpdateWindowTitle(HWND hwnd) {
         return;
     }
 
+    if (app.state == TimerState::Paused) {
+        SetWindowTextW(hwnd, L"ADHD-limiter — Пауза");
+        return;
+    }
+
     SetWindowTextW(hwnd, L"ADHD-limiter");
 }
 
@@ -89,6 +102,36 @@ void ApplyEditEnabled(HWND hwnd, BOOL enabled) {
     auto& app = GetState(hwnd);
     EnableWindow(app.workEdit, enabled);
     EnableWindow(app.restEdit, enabled);
+}
+
+void ResetTimer(HWND hwnd) {
+    auto& app = GetState(hwnd);
+    KillTimer(hwnd, kTimerId);
+    app.state = TimerState::Idle;
+    app.phase = Phase::Work;
+    app.remainingSeconds = 0;
+    app.workMinutes = kDefaultMinutes;
+    app.restMinutes = kDefaultMinutes;
+    SetMinutes(app.workEdit, app.workMinutes);
+    SetMinutes(app.restEdit, app.restMinutes);
+    ApplyEditEnabled(hwnd, TRUE);
+    UpdateButton(hwnd);
+    UpdateWindowTitle(hwnd);
+}
+
+void TogglePause(HWND hwnd) {
+    auto& app = GetState(hwnd);
+    if (app.state == TimerState::Running) {
+        KillTimer(hwnd, kTimerId);
+        app.state = TimerState::Paused;
+    } else if (app.state == TimerState::Paused) {
+        app.state = TimerState::Running;
+        SetTimer(hwnd, kTimerId, 1000, nullptr);
+    } else {
+        return;
+    }
+    UpdateButton(hwnd);
+    UpdateWindowTitle(hwnd);
 }
 
 void StartCurrentPhase(HWND hwnd) {
@@ -133,8 +176,15 @@ void ResizeControls(HWND hwnd, int width, int height) {
     const int buttonWidth = (std::max)(90, width / 5);
     const int buttonHeight = (std::max)(45, height / 8);
     const int buttonX = (width - buttonWidth) / 2;
-    const int buttonY = (std::max)(top + editHeight + 24, height - buttonHeight - margin);
+    const int buttonY = (std::max)(top + editHeight + 24, height - buttonHeight - margin - 4);
     MoveWindow(app.actionButton, buttonX, buttonY, buttonWidth, buttonHeight, TRUE);
+    const int utilitySize = (std::max)(30, (std::min)(64, height / 10));
+    const int utilityGap = 6;
+    const int utilityY = height - utilitySize - margin;
+    MoveWindow(app.resetButton, width - margin - utilitySize, utilityY,
+               utilitySize, utilitySize, TRUE);
+    MoveWindow(app.pauseButton, width - margin - utilitySize * 2 - utilityGap, utilityY,
+               utilitySize, utilitySize, TRUE);
 
     const int numberFontHeight = -(std::max)(22, editHeight / 2);
     const int symbolFontHeight = -(std::max)(24, (std::min)(64, height / 8));
@@ -156,6 +206,8 @@ void ResizeControls(HWND hwnd, int width, int height) {
     SendMessageW(app.workEdit, WM_SETFONT, reinterpret_cast<WPARAM>(app.numberFont), TRUE);
     SendMessageW(app.restEdit, WM_SETFONT, reinterpret_cast<WPARAM>(app.numberFont), TRUE);
     SendMessageW(app.actionButton, WM_SETFONT, reinterpret_cast<WPARAM>(app.symbolFont), TRUE);
+    SendMessageW(app.pauseButton, WM_SETFONT, reinterpret_cast<WPARAM>(app.symbolFont), TRUE);
+    SendMessageW(app.resetButton, WM_SETFONT, reinterpret_cast<WPARAM>(app.symbolFont), TRUE);
 
     InvalidateRect(hwnd, nullptr, TRUE);
 }
@@ -164,21 +216,20 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lPara
     switch (message) {
         case WM_NCCREATE: {
             auto* state = new AppState();
-            state->workBrush = CreateSolidBrush(RGB(216, 255, 216));
-            state->restBrush = CreateSolidBrush(RGB(255, 216, 216));
+            state->backgroundBrush = CreateSolidBrush(GetSysColor(COLOR_BTNFACE));
             SetWindowLongPtrW(hwnd, GWLP_USERDATA, reinterpret_cast<LONG_PTR>(state));
             return TRUE;
         }
         case WM_CREATE: {
             auto& app = GetState(hwnd);
             app.restEdit = CreateWindowExW(
-                WS_EX_CLIENTEDGE, L"EDIT", L"20",
+                0, L"EDIT", L"20",
                 WS_CHILD | WS_VISIBLE | ES_CENTER | ES_AUTOHSCROLL,
                 0, 0, 0, 0, hwnd, reinterpret_cast<HMENU>(1001),
                 reinterpret_cast<LPCREATESTRUCTW>(lParam)->hInstance, nullptr);
 
             app.workEdit = CreateWindowExW(
-                WS_EX_CLIENTEDGE, L"EDIT", L"20",
+                0, L"EDIT", L"20",
                 WS_CHILD | WS_VISIBLE | ES_CENTER | ES_AUTOHSCROLL,
                 0, 0, 0, 0, hwnd, reinterpret_cast<HMENU>(1002),
                 reinterpret_cast<LPCREATESTRUCTW>(lParam)->hInstance, nullptr);
@@ -186,6 +237,14 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lPara
             app.actionButton = CreateWindowExW(
                 0, L"BUTTON", L"▶", WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON,
                 0, 0, 0, 0, hwnd, reinterpret_cast<HMENU>(1003),
+                reinterpret_cast<LPCREATESTRUCTW>(lParam)->hInstance, nullptr);
+            app.pauseButton = CreateWindowExW(
+                0, L"BUTTON", L"||", WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON,
+                0, 0, 0, 0, hwnd, reinterpret_cast<HMENU>(1004),
+                reinterpret_cast<LPCREATESTRUCTW>(lParam)->hInstance, nullptr);
+            app.resetButton = CreateWindowExW(
+                0, L"BUTTON", L"↻", WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON,
+                0, 0, 0, 0, hwnd, reinterpret_cast<HMENU>(1005),
                 reinterpret_cast<LPCREATESTRUCTW>(lParam)->hInstance, nullptr);
 
             UpdateButton(hwnd);
@@ -213,6 +272,14 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lPara
                 }
                 return 0;
             }
+            if (LOWORD(wParam) == 1004 && HIWORD(wParam) == BN_CLICKED) {
+                TogglePause(hwnd);
+                return 0;
+            }
+            if (LOWORD(wParam) == 1005 && HIWORD(wParam) == BN_CLICKED) {
+                ResetTimer(hwnd);
+                return 0;
+            }
             return 0;
         }
         case WM_TIMER: {
@@ -232,7 +299,7 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lPara
 
             if (app.remainingSeconds == 0) {
                 KillTimer(hwnd, kTimerId);
-                MessageBeep(MB_ICONEXCLAMATION);
+                PlaySoundW(L"SystemAsterisk", nullptr, SND_ALIAS | SND_ASYNC);
                 app.state = TimerState::AwaitingConfirm;
                 ApplyEditEnabled(hwnd, TRUE);
                 UpdateButton(hwnd);
@@ -244,42 +311,27 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lPara
             auto& app = GetState(hwnd);
             HDC hdc = reinterpret_cast<HDC>(wParam);
             HWND control = reinterpret_cast<HWND>(lParam);
-            SetBkMode(hdc, OPAQUE);
+            SetBkMode(hdc, TRANSPARENT);
             if (control == app.restEdit) {
                 SetTextColor(hdc, RGB(0, 128, 0));
-                SetBkColor(hdc, RGB(216, 255, 216));
-                return reinterpret_cast<INT_PTR>(app.restBrush);
+                return reinterpret_cast<INT_PTR>(app.backgroundBrush);
             }
             if (control == app.workEdit) {
                 SetTextColor(hdc, RGB(180, 0, 0));
-                SetBkColor(hdc, RGB(255, 216, 216));
-                return reinterpret_cast<INT_PTR>(app.workBrush);
+                return reinterpret_cast<INT_PTR>(app.backgroundBrush);
             }
             break;
         }
-        case WM_PAINT: {
+        case WM_ERASEBKGND: {
             auto& app = GetState(hwnd);
+            RECT rect{};
+            GetClientRect(hwnd, &rect);
+            FillRect(reinterpret_cast<HDC>(wParam), &rect, app.backgroundBrush);
+            return 1;
+        }
+        case WM_PAINT: {
             PAINTSTRUCT ps;
-            HDC hdc = BeginPaint(hwnd, &ps);
-
-            RECT workRect{};
-            RECT restRect{};
-            GetWindowRect(app.workEdit, &workRect);
-            GetWindowRect(app.restEdit, &restRect);
-            MapWindowPoints(nullptr, hwnd, reinterpret_cast<POINT*>(&workRect), 2);
-            MapWindowPoints(nullptr, hwnd, reinterpret_cast<POINT*>(&restRect), 2);
-
-            RECT symbolRect{};
-            symbolRect.left = workRect.right;
-            symbolRect.right = restRect.left;
-            symbolRect.top = workRect.top;
-            symbolRect.bottom = workRect.bottom;
-
-            SetBkMode(hdc, TRANSPARENT);
-            HFONT oldFont = reinterpret_cast<HFONT>(SelectObject(hdc, app.symbolFont));
-            SetTextColor(hdc, RGB(80, 80, 80));
-            DrawTextW(hdc, L"+-", -1, &symbolRect, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
-            SelectObject(hdc, oldFont);
+            BeginPaint(hwnd, &ps);
 
             EndPaint(hwnd, &ps);
             return 0;
@@ -294,11 +346,8 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lPara
                 if (app->symbolFont != nullptr) {
                     DeleteObject(app->symbolFont);
                 }
-                if (app->workBrush != nullptr) {
-                    DeleteObject(app->workBrush);
-                }
-                if (app->restBrush != nullptr) {
-                    DeleteObject(app->restBrush);
+                if (app->backgroundBrush != nullptr) {
+                    DeleteObject(app->backgroundBrush);
                 }
                 delete app;
             }

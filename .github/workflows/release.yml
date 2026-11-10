@@ -28,7 +28,7 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Configure
-        run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
+        run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DCMAKE_MSVC_RUNTIME_LIBRARY=MultiThreaded
 
       - name: Build
         run: cmake --build build --config Release
@@ -37,9 +37,9 @@ jobs:
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
-          New-Item -ItemType Directory -Force artifacts | Out-Null
-          Copy-Item build/Release/ADHD-limiter.exe artifacts/ADHD-limiter.exe
-          Compress-Archive -Path artifacts/ADHD-limiter.exe -DestinationPath artifacts/${{ matrix.archive }}
+          New-Item -ItemType Directory -Force artifacts/package | Out-Null
+          Copy-Item build/Release/ADHD-limiter.exe artifacts/package/ADHD-limiter.exe
+          Compress-Archive -Path artifacts/package/ADHD-limiter.exe -DestinationPath artifacts/${{ matrix.archive }}
 
       - name: Package Unix
         if: runner.os != 'Windows'
@@ -72,7 +72,7 @@ jobs:
         with:
           name: ADHD-limiter ${{ github.ref_name }}
           body: |
-            Beta release of ADHD-limiter.
+            Исправлена кодировка, улучшен UI, добавлены кнопки паузы/сброса, добавлен звук, статическая линковка CRT.
 
             Windows contains the native WinAPI timer GUI. Linux and macOS currently contain the cross-platform build stub; a native GUI backend is planned for a later beta.
           files: artifacts/*
