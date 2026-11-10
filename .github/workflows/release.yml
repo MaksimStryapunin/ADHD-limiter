@@ -27,7 +27,12 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Configure
+      - name: Configure Windows
+        if: runner.os == 'Windows'
+        run: cmake -S . -B build -A x64 -DCMAKE_BUILD_TYPE=Release -DCMAKE_MSVC_RUNTIME_LIBRARY=MultiThreaded
+
+      - name: Configure Unix
+        if: runner.os != 'Windows'
         run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DCMAKE_MSVC_RUNTIME_LIBRARY=MultiThreaded
 
       - name: Build
@@ -73,7 +78,7 @@ jobs:
           name: ADHD-limiter ${{ github.ref_name }}
           prerelease: true
           body: |
-            Исправлена кодировка, улучшен UI, добавлены кнопки паузы/сброса, добавлен звук, статическая линковка CRT.
+            Исправлена кодировка (кракозябры устранены), улучшен интерфейс (системный фон, крупные цифры, GDI-иконки), заменён звук на Alarm10, добавлены кнопки паузы и сброса.
 
             Windows contains the native WinAPI timer GUI. Linux and macOS currently contain the cross-platform build stub; a native GUI backend is planned for a later beta.
           files: artifacts/*

@@ -24,7 +24,7 @@ struct AppState {
     HWND resetButton = nullptr;
 
     HFONT numberFont = nullptr;
-    HFONT symbolFont = nullptr;
+    HFONT uiFont = nullptr;
 
     HBRUSH backgroundBrush = nullptr;
 
@@ -59,16 +59,14 @@ void SetMinutes(HWND edit, int value) {
 
 void UpdateButton(HWND hwnd) {
     auto& app = GetState(hwnd);
-    const wchar_t* text = L"▶";
-    if (app.state == TimerState::AwaitingConfirm) {
-        text = L"✓";
-    }
-    SetWindowTextW(app.actionButton, text);
-
-    const wchar_t* pauseText = app.state == TimerState::Paused ? L"▶" : L"||";
-    SetWindowTextW(app.pauseButton, pauseText);
+    SetWindowTextW(app.actionButton, L"Пуск");
+    SetWindowTextW(app.pauseButton, L"Пауза");
+    SetWindowTextW(app.resetButton, L"Сброс");
     EnableWindow(app.pauseButton, app.state == TimerState::Running ||
                                       app.state == TimerState::Paused);
+    InvalidateRect(app.actionButton, nullptr, TRUE);
+    InvalidateRect(app.pauseButton, nullptr, TRUE);
+    InvalidateRect(app.resetButton, nullptr, TRUE);
 }
 
 void UpdateWindowTitle(HWND hwnd) {
@@ -178,7 +176,7 @@ void ResizeControls(HWND hwnd, int width, int height) {
     const int buttonX = (width - buttonWidth) / 2;
     const int buttonY = (std::max)(top + editHeight + 24, height - buttonHeight - margin - 4);
     MoveWindow(app.actionButton, buttonX, buttonY, buttonWidth, buttonHeight, TRUE);
-    const int utilitySize = (std::max)(30, (std::min)(64, height / 10));
+    const int utilitySize = (std::max)(42, (std::min)(72, height / 9));
     const int utilityGap = 6;
     const int utilityY = height - utilitySize - margin;
     MoveWindow(app.resetButton, width - margin - utilitySize, utilityY,
@@ -187,29 +185,90 @@ void ResizeControls(HWND hwnd, int width, int height) {
                utilitySize, utilitySize, TRUE);
 
     const int numberFontHeight = -(std::max)(22, editHeight / 2);
-    const int symbolFontHeight = -(std::max)(24, (std::min)(64, height / 8));
+    const int uiFontHeight = -(std::max)(12, (std::min)(22, height / 18));
 
     if (app.numberFont != nullptr) {
         DeleteObject(app.numberFont);
     }
-    if (app.symbolFont != nullptr) {
-        DeleteObject(app.symbolFont);
+    if (app.uiFont != nullptr) {
+        DeleteObject(app.uiFont);
     }
 
     app.numberFont = CreateFontW(numberFontHeight, 0, 0, 0, FW_BOLD, FALSE, FALSE, FALSE,
                                  DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
                                  CLEARTYPE_QUALITY, DEFAULT_PITCH | FF_DONTCARE, L"Segoe UI");
-    app.symbolFont = CreateFontW(symbolFontHeight, 0, 0, 0, FW_BOLD, FALSE, FALSE, FALSE,
-                                 DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
-                                 CLEARTYPE_QUALITY, DEFAULT_PITCH | FF_DONTCARE, L"Segoe UI Symbol");
+    app.uiFont = CreateFontW(uiFontHeight, 0, 0, 0, FW_SEMIBOLD, FALSE, FALSE, FALSE,
+                             DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
+                             CLEARTYPE_QUALITY, DEFAULT_PITCH | FF_DONTCARE, L"Segoe UI");
 
     SendMessageW(app.workEdit, WM_SETFONT, reinterpret_cast<WPARAM>(app.numberFont), TRUE);
     SendMessageW(app.restEdit, WM_SETFONT, reinterpret_cast<WPARAM>(app.numberFont), TRUE);
-    SendMessageW(app.actionButton, WM_SETFONT, reinterpret_cast<WPARAM>(app.symbolFont), TRUE);
-    SendMessageW(app.pauseButton, WM_SETFONT, reinterpret_cast<WPARAM>(app.symbolFont), TRUE);
-    SendMessageW(app.resetButton, WM_SETFONT, reinterpret_cast<WPARAM>(app.symbolFont), TRUE);
+    SendMessageW(app.actionButton, WM_SETFONT, reinterpret_cast<WPARAM>(app.uiFont), TRUE);
+    SendMessageW(app.pauseButton, WM_SETFONT, reinterpret_cast<WPARAM>(app.uiFont), TRUE);
+    SendMessageW(app.resetButton, WM_SETFONT, reinterpret_cast<WPARAM>(app.uiFont), TRUE);
 
     InvalidateRect(hwnd, nullptr, TRUE);
+}
+
+void DrawButtonIcon(HDC hdc, const RECT& rect, UINT id, TimerState state) {
+    const int centerX = id == 1003 ? rect.left + 28 : rect.left + (rect.right - rect.left) / 2;
+    const int centerY = rect.top + (rect.bottom - rect.top) / 2;
+    HPEN pen = CreatePen(PS_SOLID, 2, GetSysColor(COLOR_BTNTEXT));
+    HGDIOBJ oldPen = SelectObject(hdc, pen);
+    HGDIOBJ oldBrush = SelectObject(hdc, GetSysColorBrush(COLOR_BTNFACE));
+
+    if (id == 1003) {
+        if (state == TimerState::AwaitingConfirm) {
+            MoveToEx(hdc, centerX - 7, centerY, nullptr);
+            LineTo(hdc, centerX - 2, centerY + 6);
+            LineTo(hdc, centerX + 9, centerY - 7);
+        } else if (state == TimerState::Running) {
+            RECT pause{centerX - 8, centerY - 9, centerX - 2, centerY + 9};
+            FillRect(hdc, &pause, GetSysColorBrush(COLOR_BTNTEXT));
+            pause.left = centerX + 2;
+            pause.right = centerX + 8;
+            FillRect(hdc, &pause, GetSysColorBrush(COLOR_BTNTEXT));
+        } else {
+            POINT triangle[] = {{centerX - 7, centerY - 10},
+                                {centerX + 9, centerY},
+                                {centerX - 7, centerY + 10}};
+            Polygon(hdc, triangle, 3);
+        }
+    } else if (id == 1004) {
+        if (state == TimerState::Paused) {
+            POINT triangle[] = {{centerX - 6, centerY - 8},
+                                {centerX + 7, centerY},
+                                {centerX - 6, centerY + 8}};
+            Polygon(hdc, triangle, 3);
+        } else {
+            RECT pause{centerX - 7, centerY - 8, centerX - 2, centerY + 8};
+            FillRect(hdc, &pause, GetSysColorBrush(COLOR_BTNTEXT));
+            pause.left = centerX + 2;
+            pause.right = centerX + 7;
+            FillRect(hdc, &pause, GetSysColorBrush(COLOR_BTNTEXT));
+        }
+    } else {
+        Arc(hdc, centerX - 9, centerY - 9, centerX + 9, centerY + 9, centerX - 9,
+            centerY, centerX - 2, centerY - 9);
+        MoveToEx(hdc, centerX + 3, centerY - 9, nullptr);
+        LineTo(hdc, centerX - 2, centerY - 9);
+        LineTo(hdc, centerX - 2, centerY - 4);
+    }
+
+    SelectObject(hdc, oldBrush);
+    SelectObject(hdc, oldPen);
+    DeleteObject(pen);
+}
+
+void PlayCompletionSound() {
+    constexpr wchar_t kAlarmPath[] = L"C:\\Windows\\Media\\Alarm10.wav";
+    const DWORD attributes = GetFileAttributesW(kAlarmPath);
+    if (attributes != INVALID_FILE_ATTRIBUTES &&
+        (attributes & FILE_ATTRIBUTE_DIRECTORY) == 0) {
+        PlaySoundW(kAlarmPath, nullptr, SND_FILENAME | SND_ASYNC);
+    } else {
+        PlaySoundW(L"SystemExclamation", nullptr, SND_ALIAS | SND_ASYNC);
+    }
 }
 
 LRESULT CALLBACK WindowProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam) {
@@ -235,15 +294,18 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lPara
                 reinterpret_cast<LPCREATESTRUCTW>(lParam)->hInstance, nullptr);
 
             app.actionButton = CreateWindowExW(
-                0, L"BUTTON", L"▶", WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON,
+                0, L"BUTTON", L"Пуск",
+                WS_CHILD | WS_VISIBLE | BS_OWNERDRAW | WS_TABSTOP,
                 0, 0, 0, 0, hwnd, reinterpret_cast<HMENU>(1003),
                 reinterpret_cast<LPCREATESTRUCTW>(lParam)->hInstance, nullptr);
             app.pauseButton = CreateWindowExW(
-                0, L"BUTTON", L"||", WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON,
+                0, L"BUTTON", L"Пауза",
+                WS_CHILD | WS_VISIBLE | BS_OWNERDRAW | WS_TABSTOP,
                 0, 0, 0, 0, hwnd, reinterpret_cast<HMENU>(1004),
                 reinterpret_cast<LPCREATESTRUCTW>(lParam)->hInstance, nullptr);
             app.resetButton = CreateWindowExW(
-                0, L"BUTTON", L"↻", WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON,
+                0, L"BUTTON", L"Сброс",
+                WS_CHILD | WS_VISIBLE | BS_OWNERDRAW | WS_TABSTOP,
                 0, 0, 0, 0, hwnd, reinterpret_cast<HMENU>(1005),
                 reinterpret_cast<LPCREATESTRUCTW>(lParam)->hInstance, nullptr);
 
@@ -299,7 +361,7 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lPara
 
             if (app.remainingSeconds == 0) {
                 KillTimer(hwnd, kTimerId);
-                PlaySoundW(L"SystemAsterisk", nullptr, SND_ALIAS | SND_ASYNC);
+                PlayCompletionSound();
                 app.state = TimerState::AwaitingConfirm;
                 ApplyEditEnabled(hwnd, TRUE);
                 UpdateButton(hwnd);
@@ -322,6 +384,34 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lPara
             }
             break;
         }
+        case WM_DRAWITEM: {
+            const auto* draw = reinterpret_cast<const DRAWITEMSTRUCT*>(lParam);
+            if (draw == nullptr || draw->CtlType != ODT_BUTTON) {
+                break;
+            }
+
+            RECT rect = draw->rcItem;
+            const bool disabled = (draw->itemState & ODS_DISABLED) != 0;
+            FillRect(draw->hDC, &rect,
+                     GetSysColorBrush(disabled ? COLOR_BTNFACE : COLOR_WINDOW));
+            FrameRect(draw->hDC, &rect, GetSysColorBrush(COLOR_BTNSHADOW));
+            SetBkMode(draw->hDC, TRANSPARENT);
+            SetTextColor(draw->hDC, GetSysColor(disabled ? COLOR_GRAYTEXT : COLOR_BTNTEXT));
+            HFONT font = reinterpret_cast<HFONT>(
+                SendMessageW(draw->hwndItem, WM_GETFONT, 0, 0));
+            HGDIOBJ oldFont = SelectObject(draw->hDC, font);
+            if (draw->CtlID == 1003) {
+                wchar_t text[32]{};
+                GetWindowTextW(draw->hwndItem, text, static_cast<int>(std::size(text)));
+                RECT textRect = rect;
+                textRect.left += 48;
+                DrawTextW(draw->hDC, text, -1, &textRect,
+                          DT_CENTER | DT_SINGLELINE | DT_VCENTER);
+            }
+            DrawButtonIcon(draw->hDC, rect, static_cast<UINT>(draw->CtlID), GetState(hwnd).state);
+            SelectObject(draw->hDC, oldFont);
+            return TRUE;
+        }
         case WM_ERASEBKGND: {
             auto& app = GetState(hwnd);
             RECT rect{};
@@ -331,8 +421,28 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lPara
         }
         case WM_PAINT: {
             PAINTSTRUCT ps;
-            BeginPaint(hwnd, &ps);
-
+            HDC hdc = BeginPaint(hwnd, &ps);
+            RECT client{};
+            GetClientRect(hwnd, &client);
+            SetBkMode(hdc, TRANSPARENT);
+            SetTextColor(hdc, RGB(70, 70, 70));
+            HFONT labelFont = CreateFontW(-16, 0, 0, 0, FW_SEMIBOLD, FALSE, FALSE, FALSE,
+                                           DEFAULT_CHARSET, OUT_DEFAULT_PRECIS,
+                                           CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY,
+                                           DEFAULT_PITCH | FF_DONTCARE, L"Segoe UI");
+            HGDIOBJ oldFont = SelectObject(hdc, labelFont);
+            RECT leftLabel{0, 8, client.right / 2 - 12, 32};
+            RECT rightLabel{client.right / 2 + 12, 8, client.right, 32};
+            DrawTextW(hdc, L"Отдых", -1, &leftLabel, DT_CENTER | DT_SINGLELINE);
+            DrawTextW(hdc, L"Работа", -1, &rightLabel, DT_CENTER | DT_SINGLELINE);
+            HPEN dividerPen = CreatePen(PS_SOLID, 1, RGB(170, 170, 170));
+            HGDIOBJ oldPen = SelectObject(hdc, dividerPen);
+            MoveToEx(hdc, client.right / 2, 42, nullptr);
+            LineTo(hdc, client.right / 2, client.bottom - 92);
+            SelectObject(hdc, oldPen);
+            DeleteObject(dividerPen);
+            SelectObject(hdc, oldFont);
+            DeleteObject(labelFont);
             EndPaint(hwnd, &ps);
             return 0;
         }
@@ -343,8 +453,8 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lPara
                 if (app->numberFont != nullptr) {
                     DeleteObject(app->numberFont);
                 }
-                if (app->symbolFont != nullptr) {
-                    DeleteObject(app->symbolFont);
+                if (app->uiFont != nullptr) {
+                    DeleteObject(app->uiFont);
                 }
                 if (app->backgroundBrush != nullptr) {
                     DeleteObject(app->backgroundBrush);
