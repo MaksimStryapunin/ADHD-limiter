@@ -1,0 +1,6 @@
+#include "resource.h"
+
+IDB_START BITMAP "assets/start.bmp"
+IDB_PAUSE BITMAP "assets/pause.bmp"
+IDB_CONFIRM BITMAP "assets/confirm.bmp"
+IDB_RESET BITMAP "assets/reset.bmp"

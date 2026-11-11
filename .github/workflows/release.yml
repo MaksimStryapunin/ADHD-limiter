@@ -76,11 +76,12 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           name: ADHD-limiter ${{ github.ref_name }}
-          prerelease: true
+          prerelease: false
           body: |
-            Исправлена кодировка (кракозябры устранены), улучшен интерфейс (системный фон, крупные цифры, GDI-иконки), заменён звук на Alarm10, добавлены кнопки паузы и сброса.
-
-            Windows contains the native WinAPI timer GUI. Linux and macOS currently contain the cross-platform build stub; a native GUI backend is planned for a later beta.
+            Fixed text encoding (UTF-8 with BOM/MSVC /utf-8)
+            Added Windows 11 dark theme background (#191919)
+            Added custom icon resources (.rc)
+            Added interactive timer selection (click zones to change active timer, active timer is visually larger)
           files: artifacts/*
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
