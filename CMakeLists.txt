@@ -13,6 +13,7 @@ endif()
 
 if(WIN32)
     add_executable(adhd_limiter WIN32 src/main.cpp resource.rc)
+    target_include_directories(adhd_limiter PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
     target_link_libraries(adhd_limiter PRIVATE winmm)
 else()
     add_executable(adhd_limiter src/non_windows_stub.cpp)
