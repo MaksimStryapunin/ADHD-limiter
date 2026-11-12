@@ -5,12 +5,14 @@
 #include "resource.h"
 
 #include <algorithm>
+#include <cwchar>
 #include <iterator>
 #include <string>
 #include <mmsystem.h>
 
 namespace {
 constexpr UINT_PTR kTimerId = 1;
+constexpr UINT_PTR kCaretTimerId = 2;
 constexpr int kMinMinutes = 1;
 constexpr int kMaxMinutes = 720;
 constexpr int kDefaultMinutes = 20;
@@ -26,15 +28,11 @@ enum class Phase { Work, Rest };
 HBRUSH hBgBrush = nullptr;
 
 struct AppState {
-    HWND restEdit = nullptr;
-    HWND workEdit = nullptr;
     HWND restLabel = nullptr;
     HWND workLabel = nullptr;
     HWND nameEdit = nullptr;
     HWND actionButton = nullptr;
     HWND resetButton = nullptr;
-    WNDPROC restEditOriginalProc = nullptr;
-    WNDPROC workEditOriginalProc = nullptr;
     WNDPROC nameEditOriginalProc = nullptr;
 
     HFONT activeNumberFont = nullptr;
@@ -57,6 +55,9 @@ struct AppState {
     std::wstring restName = L"Отдых";
     std::wstring workName = L"Работа";
     Phase editingPhase = Phase::Work;
+    bool isEditing = false;
+    std::wstring editBuffer;
+    bool caretVisible = true;
 };
 
 AppState& GetState(HWND hwnd) {
@@ -65,12 +66,69 @@ AppState& GetState(HWND hwnd) {
 
 void ResizeControls(HWND hwnd, int width, int height);
 LRESULT CALLBACK NameEditProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam);
-LRESULT CALLBACK NumberEditProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam);
 
-void InvalidateTimerEdits(HWND hwnd) {
+RECT GetTimerRect(HWND hwnd, Phase phase) {
+    RECT client{};
+    GetClientRect(hwnd, &client);
+    const int margin = (std::max)(12, (client.right - client.left) / 30);
+    const int top = (std::max)(16, (client.bottom - client.top) / 5);
+    const int gap = (std::max)(30, (client.right - client.left) / 10);
+    const int editWidth = (std::max)(90, (client.right - client.left - gap - margin * 2) / 2);
+    const int editHeight = (std::max)(40, (client.bottom - client.top) / 4);
+    const int leftX = margin;
+    const int rightX = client.right - margin - editWidth;
+    const int left = phase == Phase::Rest ? leftX : rightX;
+    return {left, top, left + editWidth, top + editHeight};
+}
+
+int GetTimerMinutes(const AppState& app, Phase phase) {
+    if (app.state == TimerState::Running && app.phase == phase) {
+        return app.remainingSeconds / 60;
+    }
+    return phase == Phase::Work ? app.workMinutes : app.restMinutes;
+}
+
+void CommitTimerEdit(HWND hwnd) {
     auto& app = GetState(hwnd);
-    InvalidateRect(app.restEdit, nullptr, TRUE);
-    InvalidateRect(app.workEdit, nullptr, TRUE);
+    if (!app.isEditing) {
+        return;
+    }
+    wchar_t* end = nullptr;
+    const long parsed = std::wcstol(app.editBuffer.c_str(), &end, 10);
+    if (end != app.editBuffer.c_str() && *end == L'\0') {
+        const long bounded = std::clamp(parsed, static_cast<long>(kMinMinutes),
+                                        static_cast<long>(kMaxMinutes));
+        const int value = static_cast<int>(bounded);
+        if (app.editingPhase == Phase::Work) {
+            app.workMinutes = value;
+        } else {
+            app.restMinutes = value;
+        }
+    }
+    app.isEditing = false;
+    app.editBuffer.clear();
+    KillTimer(hwnd, kCaretTimerId);
+    app.caretVisible = true;
+    SetFocus(hwnd);
+    InvalidateRect(hwnd, nullptr, TRUE);
+}
+
+void BeginTimerEdit(HWND hwnd, Phase phase) {
+    auto& app = GetState(hwnd);
+    if (app.state == TimerState::Running) {
+        return;
+    }
+    if (app.isEditing) {
+        CommitTimerEdit(hwnd);
+    }
+    app.selectedPhase = phase;
+    app.editingPhase = phase;
+    app.editBuffer = std::to_wstring(GetTimerMinutes(app, phase));
+    app.isEditing = true;
+    app.caretVisible = true;
+    SetFocus(hwnd);
+    SetTimer(hwnd, kCaretTimerId, 500, nullptr);
+    InvalidateRect(hwnd, nullptr, TRUE);
 }
 
 void RemoveTrayIcon(HWND hwnd) {
@@ -120,23 +178,6 @@ int MeasureTextWidth(HWND hwnd, const std::wstring& text) {
     SelectObject(dc, oldFont);
     ReleaseDC(hwnd, dc);
     return size.cx + 16;
-}
-
-int ReadMinutes(HWND edit, int fallback) {
-    wchar_t buffer[64]{};
-    GetWindowTextW(edit, buffer, static_cast<int>(std::size(buffer)));
-
-    try {
-        const int value = std::stoi(buffer);
-        return std::clamp(value, kMinMinutes, kMaxMinutes);
-    } catch (...) {
-        return fallback;
-    }
-}
-
-void SetMinutes(HWND edit, int value) {
-    const int normalized = std::clamp(value, kMinMinutes, kMaxMinutes);
-    SetWindowTextW(edit, std::to_wstring(normalized).c_str());
 }
 
 void UpdateButton(HWND hwnd) {
@@ -220,7 +261,7 @@ void BeginNameEdit(HWND hwnd, Phase phase) {
     GetWindowRect(label, &rect);
     MapWindowPoints(nullptr, hwnd, reinterpret_cast<POINT*>(&rect), 2);
     const std::wstring& name = phase == Phase::Work ? app.workName : app.restName;
-    const int editWidth = MeasureTextWidth(hwnd, name);
+    const int editWidth = (std::max)(200, MeasureTextWidth(hwnd, name));
     const int labelCenter = (rect.left + rect.right) / 2;
     const int left = (std::max)(0, labelCenter - editWidth / 2);
     app.nameEdit = CreateWindowExW(
@@ -232,6 +273,7 @@ void BeginNameEdit(HWND hwnd, Phase phase) {
         SetWindowLongPtrW(app.nameEdit, GWLP_WNDPROC,
                           reinterpret_cast<LONG_PTR>(NameEditProc)));
     SendMessageW(app.nameEdit, WM_SETFONT, reinterpret_cast<WPARAM>(app.uiFont), TRUE);
+    SendMessageW(app.nameEdit, EM_SETLIMITTEXT, 16, 0);
     SendMessageW(app.nameEdit, EM_SETSEL, 0, -1);
     SetFocus(app.nameEdit);
 }
@@ -258,27 +300,6 @@ LRESULT CALLBACK NameEditProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lPa
     return DefWindowProcW(hwnd, message, wParam, lParam);
 }
 
-LRESULT CALLBACK NumberEditProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam) {
-    HWND parent = GetParent(hwnd);
-    if (message == WM_ERASEBKGND && parent != nullptr) {
-        auto& app = GetState(parent);
-        RECT rect{};
-        GetClientRect(hwnd, &rect);
-        FillRect(reinterpret_cast<HDC>(wParam), &rect, app.backgroundBrush);
-        return 1;
-    }
-
-    if (parent != nullptr) {
-        auto& app = GetState(parent);
-        const WNDPROC original = hwnd == app.restEdit ? app.restEditOriginalProc
-                                                      : app.workEditOriginalProc;
-        if (original != nullptr) {
-            return CallWindowProcW(original, hwnd, message, wParam, lParam);
-        }
-    }
-    return DefWindowProcW(hwnd, message, wParam, lParam);
-}
-
 void SetActivePhase(HWND hwnd, Phase phase) {
     auto& app = GetState(hwnd);
     if (app.state == TimerState::Running) {
@@ -291,12 +312,6 @@ void SetActivePhase(HWND hwnd, Phase phase) {
     InvalidateRect(hwnd, nullptr, TRUE);
 }
 
-void ApplyEditEnabled(HWND hwnd, BOOL enabled) {
-    auto& app = GetState(hwnd);
-    EnableWindow(app.workEdit, enabled);
-    EnableWindow(app.restEdit, enabled);
-}
-
 void ResetTimer(HWND hwnd) {
     auto& app = GetState(hwnd);
     KillTimer(hwnd, kTimerId);
@@ -306,11 +321,15 @@ void ResetTimer(HWND hwnd) {
     app.remainingSeconds = 0;
     app.workMinutes = kDefaultMinutes;
     app.restMinutes = kDefaultMinutes;
-    SetMinutes(app.workEdit, app.workMinutes);
-    SetMinutes(app.restEdit, app.restMinutes);
-    ApplyEditEnabled(hwnd, TRUE);
+    app.workName = L"Работа";
+    app.restName = L"Отдых";
+    app.isEditing = false;
+    app.editBuffer.clear();
+    KillTimer(hwnd, kCaretTimerId);
+    UpdateNameLabels(hwnd);
     UpdateButton(hwnd);
     UpdateWindowTitle(hwnd);
+    InvalidateRect(hwnd, nullptr, TRUE);
 }
 
 void TogglePause(HWND hwnd) {
@@ -325,28 +344,22 @@ void TogglePause(HWND hwnd) {
         return;
     }
     UpdateButton(hwnd);
-    InvalidateTimerEdits(hwnd);
+    InvalidateRect(hwnd, nullptr, TRUE);
     UpdateWindowTitle(hwnd);
 }
 
 void StartCurrentPhase(HWND hwnd) {
     auto& app = GetState(hwnd);
-    app.workMinutes = ReadMinutes(app.workEdit, app.workMinutes);
-    app.restMinutes = ReadMinutes(app.restEdit, app.restMinutes);
-
-    SetMinutes(app.workEdit, app.workMinutes);
-    SetMinutes(app.restEdit, app.restMinutes);
-
     app.phase = app.selectedPhase;
     const int phaseMinutes = app.phase == Phase::Work ? app.workMinutes : app.restMinutes;
     app.remainingSeconds = phaseMinutes * 60;
-    SetMinutes(app.phase == Phase::Work ? app.workEdit : app.restEdit, phaseMinutes);
-
     app.state = TimerState::Running;
-    ApplyEditEnabled(hwnd, FALSE);
+    app.isEditing = false;
+    app.editBuffer.clear();
+    KillTimer(hwnd, kCaretTimerId);
     SetTimer(hwnd, kTimerId, 1000, nullptr);
     UpdateButton(hwnd);
-    InvalidateTimerEdits(hwnd);
+    InvalidateRect(hwnd, nullptr, TRUE);
     UpdateWindowTitle(hwnd);
 }
 
@@ -362,8 +375,6 @@ void ResizeControls(HWND hwnd, int width, int height) {
     const int leftX = margin;
     const int rightX = width - margin - editWidth;
 
-    MoveWindow(app.restEdit, leftX, top, editWidth, editHeight, TRUE);
-    MoveWindow(app.workEdit, rightX, top, editWidth, editHeight, TRUE);
     MoveWindow(app.restLabel, leftX, 8, editWidth, 32, TRUE);
     MoveWindow(app.workLabel, rightX, 8, editWidth, 32, TRUE);
 
@@ -403,16 +414,6 @@ void ResizeControls(HWND hwnd, int width, int height) {
                              DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
                              CLEARTYPE_QUALITY, DEFAULT_PITCH | FF_DONTCARE, L"Segoe UI");
 
-    SendMessageW(app.workEdit, WM_SETFONT,
-                 reinterpret_cast<WPARAM>(app.selectedPhase == Phase::Work
-                                              ? app.activeNumberFont
-                                              : app.inactiveNumberFont),
-                 TRUE);
-    SendMessageW(app.restEdit, WM_SETFONT,
-                 reinterpret_cast<WPARAM>(app.selectedPhase == Phase::Rest
-                                              ? app.activeNumberFont
-                                              : app.inactiveNumberFont),
-                 TRUE);
     SendMessageW(app.restLabel, WM_SETFONT, reinterpret_cast<WPARAM>(app.uiFont), TRUE);
     SendMessageW(app.workLabel, WM_SETFONT, reinterpret_cast<WPARAM>(app.uiFont), TRUE);
 
@@ -484,24 +485,6 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lPara
         }
         case WM_CREATE: {
             auto& app = GetState(hwnd);
-            app.restEdit = CreateWindowExW(
-                0, L"EDIT", L"20",
-                WS_CHILD | WS_VISIBLE | ES_CENTER | ES_AUTOHSCROLL,
-                0, 0, 0, 0, hwnd, reinterpret_cast<HMENU>(1001),
-                reinterpret_cast<LPCREATESTRUCTW>(lParam)->hInstance, nullptr);
-
-            app.workEdit = CreateWindowExW(
-                0, L"EDIT", L"20",
-                WS_CHILD | WS_VISIBLE | ES_CENTER | ES_AUTOHSCROLL,
-                0, 0, 0, 0, hwnd, reinterpret_cast<HMENU>(1002),
-                reinterpret_cast<LPCREATESTRUCTW>(lParam)->hInstance, nullptr);
-            app.restEditOriginalProc = reinterpret_cast<WNDPROC>(
-                SetWindowLongPtrW(app.restEdit, GWLP_WNDPROC,
-                                  reinterpret_cast<LONG_PTR>(NumberEditProc)));
-            app.workEditOriginalProc = reinterpret_cast<WNDPROC>(
-                SetWindowLongPtrW(app.workEdit, GWLP_WNDPROC,
-                                  reinterpret_cast<LONG_PTR>(NumberEditProc)));
-
             app.restLabel = CreateWindowExW(
                 0, L"STATIC", app.restName.c_str(),
                 WS_CHILD | WS_VISIBLE | SS_CENTER | SS_NOTIFY,
@@ -553,8 +536,9 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lPara
                 return 0;
             }
             if (LOWORD(wParam) == kTrayExitCommand) {
+                KillTimer(hwnd, kTimerId);
                 RemoveTrayIcon(hwnd);
-                DestroyWindow(hwnd);
+                PostQuitMessage(0);
                 return 0;
             }
             if (LOWORD(wParam) == 1003 && HIWORD(wParam) == BN_CLICKED) {
@@ -585,13 +569,6 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lPara
                 CommitNameEdit(hwnd);
                 return 0;
             }
-            if (HIWORD(wParam) == EN_SETFOCUS) {
-                if (LOWORD(wParam) == 1001) {
-                    SetActivePhase(hwnd, Phase::Rest);
-                } else if (LOWORD(wParam) == 1002) {
-                    SetActivePhase(hwnd, Phase::Work);
-                }
-            }
             return 0;
         }
         case kTrayMessage: {
@@ -606,10 +583,61 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lPara
             RECT client{};
             GetClientRect(hwnd, &client);
             const int x = static_cast<int>(static_cast<short>(LOWORD(lParam)));
-            SetActivePhase(hwnd, x < client.right / 2 ? Phase::Rest : Phase::Work);
+            const int y = static_cast<int>(static_cast<short>(HIWORD(lParam)));
+            const Phase clickedPhase = x < client.right / 2 ? Phase::Rest : Phase::Work;
+            const RECT timerRect = GetTimerRect(hwnd, clickedPhase);
+            if (PtInRect(&timerRect, POINT{x, y})) {
+                BeginTimerEdit(hwnd, clickedPhase);
+            } else if (GetState(hwnd).isEditing) {
+                CommitTimerEdit(hwnd);
+            } else {
+                SetActivePhase(hwnd, clickedPhase);
+            }
             return 0;
         }
+        case WM_CHAR: {
+            auto& app = GetState(hwnd);
+            if (!app.isEditing) {
+                return 0;
+            }
+            if (wParam >= L'0' && wParam <= L'9' && app.editBuffer.size() < 3) {
+                app.editBuffer.push_back(static_cast<wchar_t>(wParam));
+                app.caretVisible = true;
+                InvalidateRect(hwnd, nullptr, TRUE);
+            }
+            return 0;
+        }
+        case WM_KEYDOWN: {
+            auto& app = GetState(hwnd);
+            if (app.isEditing) {
+                if (wParam == VK_RETURN) {
+                    CommitTimerEdit(hwnd);
+                    return 0;
+                }
+                if (wParam == VK_BACK) {
+                    if (!app.editBuffer.empty()) {
+                        app.editBuffer.pop_back();
+                        InvalidateRect(hwnd, nullptr, TRUE);
+                    }
+                    return 0;
+                }
+                if (wParam == VK_ESCAPE) {
+                    app.isEditing = false;
+                    app.editBuffer.clear();
+                    KillTimer(hwnd, kCaretTimerId);
+                    InvalidateRect(hwnd, nullptr, TRUE);
+                    return 0;
+                }
+            }
+            break;
+        }
         case WM_TIMER: {
+            if (wParam == kCaretTimerId) {
+                auto& app = GetState(hwnd);
+                app.caretVisible = !app.caretVisible;
+                InvalidateRect(hwnd, nullptr, TRUE);
+                return 0;
+            }
             if (wParam != kTimerId) {
                 return 0;
             }
@@ -621,8 +649,6 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lPara
 
             if (app.remainingSeconds > 0) {
                 --app.remainingSeconds;
-                HWND activeEdit = app.phase == Phase::Work ? app.workEdit : app.restEdit;
-                SetMinutes(activeEdit, app.remainingSeconds / 60);
                 UpdateWindowTitle(hwnd);
             }
 
@@ -631,7 +657,6 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lPara
                 PlayCompletionSound();
                 app.state = TimerState::AwaitingConfirm;
                 app.selectedPhase = app.phase == Phase::Work ? Phase::Rest : Phase::Work;
-                ApplyEditEnabled(hwnd, TRUE);
                 RECT client{};
                 GetClientRect(hwnd, &client);
                 ResizeControls(hwnd, client.right, client.bottom);
@@ -644,21 +669,9 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lPara
             auto& app = GetState(hwnd);
             HDC hdc = reinterpret_cast<HDC>(wParam);
             HWND control = reinterpret_cast<HWND>(lParam);
-            SetBkMode(hdc, OPAQUE);
-            SetBkColor(hdc, kBackgroundColor);
-            if (control == app.restEdit) {
-                const bool inactive = app.state == TimerState::Running &&
-                                      app.phase != Phase::Rest;
-                SetTextColor(hdc, inactive ? RGB(150, 150, 150) : RGB(0, 255, 0));
-                return reinterpret_cast<INT_PTR>(app.backgroundBrush);
-            }
-            if (control == app.workEdit) {
-                const bool inactive = app.state == TimerState::Running &&
-                                      app.phase != Phase::Work;
-                SetTextColor(hdc, inactive ? RGB(150, 150, 150) : RGB(255, 50, 50));
-                return reinterpret_cast<INT_PTR>(app.backgroundBrush);
-            }
             if (control == app.nameEdit) {
+                SetBkMode(hdc, OPAQUE);
+                SetBkColor(hdc, kBackgroundColor);
                 SetTextColor(hdc, RGB(255, 255, 255));
                 return reinterpret_cast<INT_PTR>(app.backgroundBrush);
             }
@@ -712,6 +725,43 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lPara
             HDC hdc = BeginPaint(hwnd, &ps);
             RECT client{};
             GetClientRect(hwnd, &client);
+            auto& app = GetState(hwnd);
+            SetBkMode(hdc, TRANSPARENT);
+            for (const Phase phase : {Phase::Rest, Phase::Work}) {
+                RECT timerRect = GetTimerRect(hwnd, phase);
+                const bool active = app.state == TimerState::Running
+                                        ? app.phase == phase
+                                        : app.selectedPhase == phase;
+                const COLORREF color = active
+                                           ? (phase == Phase::Rest ? RGB(0, 255, 0)
+                                                                   : RGB(255, 50, 50))
+                                           : RGB(150, 150, 150);
+                SetTextColor(hdc, color);
+                SelectObject(hdc, active ? app.activeNumberFont : app.inactiveNumberFont);
+                std::wstring text;
+                if (app.isEditing && app.editingPhase == phase) {
+                    text = app.editBuffer;
+                } else {
+                    text = std::to_wstring(GetTimerMinutes(app, phase));
+                }
+                DrawTextW(hdc, text.c_str(), static_cast<int>(text.size()), &timerRect,
+                          DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+                if (app.isEditing && app.editingPhase == phase && app.caretVisible) {
+                    SIZE textSize{};
+                    GetTextExtentPoint32W(hdc, text.c_str(), static_cast<int>(text.size()),
+                                          &textSize);
+                    const int caretX = (timerRect.left + timerRect.right - textSize.cx) / 2 +
+                                       textSize.cx + 2;
+                    const int caretTop = timerRect.top + (timerRect.bottom - timerRect.top) / 4;
+                    const int caretBottom = timerRect.bottom - (timerRect.bottom - timerRect.top) / 4;
+                    HPEN caretPen = CreatePen(PS_SOLID, 2, color);
+                    HGDIOBJ oldPen = SelectObject(hdc, caretPen);
+                    MoveToEx(hdc, caretX, caretTop, nullptr);
+                    LineTo(hdc, caretX, caretBottom);
+                    SelectObject(hdc, oldPen);
+                    DeleteObject(caretPen);
+                }
+            }
             HPEN dividerPen = CreatePen(PS_SOLID, 1, RGB(170, 170, 170));
             HGDIOBJ oldPen = SelectObject(hdc, dividerPen);
             MoveToEx(hdc, client.right / 2, 42, nullptr);
@@ -726,6 +776,7 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lPara
             if (app != nullptr) {
                 RemoveTrayIcon(hwnd);
                 KillTimer(hwnd, kTimerId);
+                KillTimer(hwnd, kCaretTimerId);
                 if (app->activeNumberFont != nullptr) {
                     DeleteObject(app->activeNumberFont);
                 }

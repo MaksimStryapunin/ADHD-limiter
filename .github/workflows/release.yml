@@ -78,8 +78,8 @@ jobs:
           name: ADHD-limiter ${{ github.ref_name }}
           prerelease: ${{ endsWith(github.ref_name, '-beta') }}
           body: |
-            Diagnosed and fixed white background timer boxes (drawn directly via WM_PAINT/owner-draw
-            for stability), fixed input text duplication, fixed executable file icon.
+            Removed native controls for timer digits to completely fix white boxes (now drawn via GDI),
+            increased name character limit to 16, Reset now resets names, fixed tray exit process leak.
           files: artifacts/*
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
