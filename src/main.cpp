@@ -1,6 +1,7 @@
 ﻿#define NOMINMAX
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
+#include <shellapi.h>
 #include "resource.h"
 
 #include <algorithm>
@@ -13,6 +14,10 @@ constexpr UINT_PTR kTimerId = 1;
 constexpr int kMinMinutes = 1;
 constexpr int kMaxMinutes = 720;
 constexpr int kDefaultMinutes = 20;
+constexpr UINT kTrayMessage = WM_APP + 1;
+constexpr UINT kTrayIconId = 1;
+constexpr UINT kTrayOpenCommand = 40001;
+constexpr UINT kTrayExitCommand = 40002;
 
 enum class TimerState { Idle, Running, Paused, AwaitingConfirm };
 enum class Phase { Work, Rest };
@@ -26,6 +31,7 @@ struct AppState {
     HWND actionButton = nullptr;
     HWND pauseButton = nullptr;
     HWND resetButton = nullptr;
+    WNDPROC nameEditOriginalProc = nullptr;
 
     HFONT activeNumberFont = nullptr;
     HFONT inactiveNumberFont = nullptr;
@@ -33,6 +39,10 @@ struct AppState {
 
     HBRUSH backgroundBrush = nullptr;
     HINSTANCE instance = nullptr;
+    HICON bigIcon = nullptr;
+    HICON smallIcon = nullptr;
+    NOTIFYICONDATAW trayIcon{};
+    bool trayAdded = false;
     TimerState state = TimerState::Idle;
     Phase phase = Phase::Work;
     Phase selectedPhase = Phase::Work;
@@ -43,6 +53,7 @@ struct AppState {
     std::wstring restName = L"Отдых";
     std::wstring workName = L"Работа";
     Phase editingPhase = Phase::Work;
+    bool cancelNameEdit = false;
 };
 
 AppState& GetState(HWND hwnd) {
@@ -50,6 +61,56 @@ AppState& GetState(HWND hwnd) {
 }
 
 void ResizeControls(HWND hwnd, int width, int height);
+LRESULT CALLBACK NameEditProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam);
+
+void RemoveTrayIcon(HWND hwnd) {
+    auto& app = GetState(hwnd);
+    if (app.trayAdded) {
+        Shell_NotifyIconW(NIM_DELETE, &app.trayIcon);
+        app.trayAdded = false;
+    }
+}
+
+void RestoreWindow(HWND hwnd) {
+    ShowWindow(hwnd, SW_RESTORE);
+    SetForegroundWindow(hwnd);
+}
+
+void AddTrayIcon(HWND hwnd) {
+    auto& app = GetState(hwnd);
+    app.trayIcon = {};
+    app.trayIcon.cbSize = sizeof(app.trayIcon);
+    app.trayIcon.hWnd = hwnd;
+    app.trayIcon.uID = kTrayIconId;
+    app.trayIcon.uFlags = NIF_MESSAGE | NIF_ICON | NIF_TIP;
+    app.trayIcon.uCallbackMessage = kTrayMessage;
+    app.trayIcon.hIcon = app.smallIcon;
+    lstrcpynW(app.trayIcon.szTip, L"ADHD-limiter", ARRAYSIZE(app.trayIcon.szTip));
+    app.trayAdded = Shell_NotifyIconW(NIM_ADD, &app.trayIcon) == TRUE;
+}
+
+void ShowTrayMenu(HWND hwnd) {
+    HMENU menu = CreatePopupMenu();
+    AppendMenuW(menu, MF_STRING, kTrayOpenCommand, L"Открыть");
+    AppendMenuW(menu, MF_STRING, kTrayExitCommand, L"Выход");
+    POINT cursor{};
+    GetCursorPos(&cursor);
+    SetForegroundWindow(hwnd);
+    TrackPopupMenu(menu, TPM_RIGHTBUTTON | TPM_BOTTOMALIGN, cursor.x, cursor.y, 0, hwnd,
+                   nullptr);
+    DestroyMenu(menu);
+}
+
+int MeasureTextWidth(HWND hwnd, const std::wstring& text) {
+    auto& app = GetState(hwnd);
+    HDC dc = GetDC(hwnd);
+    HGDIOBJ oldFont = SelectObject(dc, app.uiFont);
+    SIZE size{};
+    GetTextExtentPoint32W(dc, text.c_str(), static_cast<int>(text.size()), &size);
+    SelectObject(dc, oldFont);
+    ReleaseDC(hwnd, dc);
+    return size.cx + 16;
+}
 
 int ReadMinutes(HWND edit, int fallback) {
     wchar_t buffer[64]{};
@@ -113,6 +174,13 @@ void CommitNameEdit(HWND hwnd) {
         return;
     }
 
+    if (app.cancelNameEdit) {
+        app.cancelNameEdit = false;
+        DestroyWindow(app.nameEdit);
+        app.nameEdit = nullptr;
+        return;
+    }
+
     wchar_t buffer[128]{};
     GetWindowTextW(app.nameEdit, buffer, static_cast<int>(std::size(buffer)));
     std::wstring name = buffer;
@@ -129,6 +197,17 @@ void CommitNameEdit(HWND hwnd) {
     UpdateWindowTitle(hwnd);
 }
 
+void CancelNameEdit(HWND hwnd) {
+    auto& app = GetState(hwnd);
+    if (app.nameEdit == nullptr) {
+        return;
+    }
+    app.cancelNameEdit = true;
+    DestroyWindow(app.nameEdit);
+    app.nameEdit = nullptr;
+    app.cancelNameEdit = false;
+}
+
 void BeginNameEdit(HWND hwnd, Phase phase) {
     auto& app = GetState(hwnd);
     if (app.nameEdit != nullptr || app.state == TimerState::Running) {
@@ -141,14 +220,42 @@ void BeginNameEdit(HWND hwnd, Phase phase) {
     GetWindowRect(label, &rect);
     MapWindowPoints(nullptr, hwnd, reinterpret_cast<POINT*>(&rect), 2);
     const std::wstring& name = phase == Phase::Work ? app.workName : app.restName;
+    const int editWidth = MeasureTextWidth(hwnd, name);
+    const int labelCenter = (rect.left + rect.right) / 2;
+    const int left = (std::max)(0, labelCenter - editWidth / 2);
     app.nameEdit = CreateWindowExW(
-        WS_EX_CLIENTEDGE, L"EDIT", name.c_str(),
+        0, L"EDIT", name.c_str(),
         WS_CHILD | WS_VISIBLE | ES_CENTER | ES_AUTOHSCROLL,
-        rect.left, rect.top, rect.right - rect.left, rect.bottom - rect.top,
+        left, rect.top, editWidth, rect.bottom - rect.top,
         hwnd, reinterpret_cast<HMENU>(1008), app.instance, nullptr);
+    app.nameEditOriginalProc = reinterpret_cast<WNDPROC>(
+        SetWindowLongPtrW(app.nameEdit, GWLP_WNDPROC,
+                          reinterpret_cast<LONG_PTR>(NameEditProc)));
     SendMessageW(app.nameEdit, WM_SETFONT, reinterpret_cast<WPARAM>(app.uiFont), TRUE);
     SendMessageW(app.nameEdit, EM_SETSEL, 0, -1);
     SetFocus(app.nameEdit);
+}
+
+LRESULT CALLBACK NameEditProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam) {
+    if (message == WM_KEYDOWN) {
+        HWND parent = GetParent(hwnd);
+        if (wParam == VK_RETURN) {
+            CommitNameEdit(parent);
+            return 0;
+        }
+        if (wParam == VK_ESCAPE) {
+            CancelNameEdit(parent);
+            return 0;
+        }
+    }
+    HWND parent = GetParent(hwnd);
+    if (parent != nullptr) {
+        auto& app = GetState(parent);
+        if (app.nameEditOriginalProc != nullptr) {
+            return CallWindowProcW(app.nameEditOriginalProc, hwnd, message, wParam, lParam);
+        }
+    }
+    return DefWindowProcW(hwnd, message, wParam, lParam);
 }
 
 void SetActivePhase(HWND hwnd, Phase phase) {
@@ -393,6 +500,15 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lPara
                 0, 0, 0, 0, hwnd, reinterpret_cast<HMENU>(1005),
                 reinterpret_cast<LPCREATESTRUCTW>(lParam)->hInstance, nullptr);
 
+            app.bigIcon = static_cast<HICON>(
+                LoadImageW(app.instance, MAKEINTRESOURCEW(IDI_MAIN_ICON), IMAGE_ICON, 32, 32,
+                           LR_DEFAULTCOLOR));
+            app.smallIcon = static_cast<HICON>(
+                LoadImageW(app.instance, MAKEINTRESOURCEW(IDI_MAIN_ICON), IMAGE_ICON, 16, 16,
+                           LR_DEFAULTCOLOR));
+            SendMessageW(hwnd, WM_SETICON, ICON_BIG, reinterpret_cast<LPARAM>(app.bigIcon));
+            SendMessageW(hwnd, WM_SETICON, ICON_SMALL, reinterpret_cast<LPARAM>(app.smallIcon));
+            AddTrayIcon(hwnd);
             UpdateButton(hwnd);
             UpdateWindowTitle(hwnd);
             return 0;
@@ -408,6 +524,15 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lPara
             return 0;
         }
         case WM_COMMAND: {
+            if (LOWORD(wParam) == kTrayOpenCommand) {
+                RestoreWindow(hwnd);
+                return 0;
+            }
+            if (LOWORD(wParam) == kTrayExitCommand) {
+                RemoveTrayIcon(hwnd);
+                DestroyWindow(hwnd);
+                return 0;
+            }
             if (LOWORD(wParam) == 1003 && HIWORD(wParam) == BN_CLICKED) {
                 auto& app = GetState(hwnd);
                 if (app.state == TimerState::Idle) {
@@ -443,6 +568,14 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lPara
                 } else if (LOWORD(wParam) == 1002) {
                     SetActivePhase(hwnd, Phase::Work);
                 }
+            }
+            return 0;
+        }
+        case kTrayMessage: {
+            if (lParam == WM_LBUTTONDBLCLK) {
+                RestoreWindow(hwnd);
+            } else if (lParam == WM_RBUTTONUP) {
+                ShowTrayMenu(hwnd);
             }
             return 0;
         }
@@ -498,7 +631,7 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lPara
                 return reinterpret_cast<INT_PTR>(app.backgroundBrush);
             }
             if (control == app.nameEdit) {
-                SetTextColor(hdc, RGB(220, 220, 220));
+                SetTextColor(hdc, RGB(255, 255, 255));
                 return reinterpret_cast<INT_PTR>(app.backgroundBrush);
             }
             break;
@@ -514,6 +647,15 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lPara
             }
             break;
         }
+        case WM_CLOSE:
+            ShowWindow(hwnd, SW_HIDE);
+            return 0;
+        case WM_SYSCOMMAND:
+            if ((wParam & 0xFFF0) == SC_CLOSE) {
+                ShowWindow(hwnd, SW_HIDE);
+                return 0;
+            }
+            break;
         case WM_DRAWITEM: {
             const auto* draw = reinterpret_cast<const DRAWITEMSTRUCT*>(lParam);
             if (draw == nullptr || draw->CtlType != ODT_BUTTON) {
@@ -555,6 +697,7 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lPara
         case WM_DESTROY: {
             auto* app = reinterpret_cast<AppState*>(GetWindowLongPtrW(hwnd, GWLP_USERDATA));
             if (app != nullptr) {
+                RemoveTrayIcon(hwnd);
                 KillTimer(hwnd, kTimerId);
                 if (app->activeNumberFont != nullptr) {
                     DeleteObject(app->activeNumberFont);
@@ -567,6 +710,12 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lPara
                 }
                 if (app->backgroundBrush != nullptr) {
                     DeleteObject(app->backgroundBrush);
+                }
+                if (app->bigIcon != nullptr) {
+                    DestroyIcon(app->bigIcon);
+                }
+                if (app->smallIcon != nullptr) {
+                    DestroyIcon(app->smallIcon);
                 }
                 delete app;
             }
@@ -586,6 +735,12 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int showCmd) {
     WNDCLASSW wc{};
     wc.lpfnWndProc = WindowProc;
     wc.hInstance = instance;
+    wc.hIcon = static_cast<HICON>(
+        LoadImageW(instance, MAKEINTRESOURCEW(IDI_MAIN_ICON), IMAGE_ICON, 32, 32,
+                   LR_DEFAULTCOLOR));
+    wc.hIconSm = static_cast<HICON>(
+        LoadImageW(instance, MAKEINTRESOURCEW(IDI_MAIN_ICON), IMAGE_ICON, 16, 16,
+                   LR_DEFAULTCOLOR));
     wc.lpszClassName = kClassName;
     wc.hCursor = LoadCursorW(nullptr, IDC_ARROW);
     wc.hbrBackground = reinterpret_cast<HBRUSH>(COLOR_WINDOW + 1);
