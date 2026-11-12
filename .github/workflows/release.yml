@@ -76,12 +76,14 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           name: ADHD-limiter ${{ github.ref_name }}
-          prerelease: false
+          prerelease: ${{ startsWith(github.ref_name, 'v0.3.0-beta') }}
           body: |
-            Fixed text encoding (UTF-8 with BOM/MSVC /utf-8)
-            Added Windows 11 dark theme background (#191919)
-            Added custom icon resources (.rc)
-            Added interactive timer selection (click zones to change active timer, active timer is visually larger)
+            Исправлены визуальные баги: кнопка «Пуск» теперь квадратная с GDI-иконкой,
+            треугольник больше не перевёрнут, иконка сброса перерисована, фон цифр
+            больше не пропадает при запуске.
+
+            Добавлен синхронизированный отсчёт: минуты в боксе, секунды в заголовке окна.
+            Добавлена возможность редактирования названий таймеров («Отдых»/«Работа») по клику.
           files: artifacts/*
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
