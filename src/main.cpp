@@ -70,12 +70,13 @@ LRESULT CALLBACK NameEditProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lPa
 RECT GetTimerRect(HWND hwnd, Phase phase) {
     RECT client{};
     GetClientRect(hwnd, &client);
-    const int margin = (std::max)(12, (client.right - client.left) / 30);
-    const int top = (std::max)(16, (client.bottom - client.top) / 5);
-    const int gap = (std::max)(30, (client.right - client.left) / 10);
-    const int editWidth =
-        (std::max)(90, (client.right - client.left - gap - margin * 2) / 2);
-    const int editHeight = (std::max)(40, (client.bottom - client.top) / 4);
+    const int width = static_cast<int>(client.right - client.left);
+    const int height = static_cast<int>(client.bottom - client.top);
+    const int margin = (std::max)(12, width / 30);
+    const int top = (std::max)(16, height / 5);
+    const int gap = (std::max)(30, width / 10);
+    const int editWidth = (std::max)(90, (width - gap - margin * 2) / 2);
+    const int editHeight = (std::max)(40, height / 4);
     const int leftX = margin;
     const int rightX = client.right - margin - editWidth;
     const int left = phase == Phase::Rest ? leftX : rightX;
