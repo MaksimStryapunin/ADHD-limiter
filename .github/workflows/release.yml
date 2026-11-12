@@ -78,9 +78,8 @@ jobs:
           name: ADHD-limiter ${{ github.ref_name }}
           prerelease: ${{ endsWith(github.ref_name, '-beta') }}
           body: |
-            Fixed static text background artifact, improved edit controls for custom timer names
-            (enter/click-outside to confirm), added custom app icon, added minimize to system
-            tray with background timer support.
+            Ultimate fix for static timer background (no more white boxes), merged Play/Pause into
+            one toggle button, fixed text clipping in custom timer names, updated app icon.
           files: artifacts/*
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
