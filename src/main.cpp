@@ -90,68 +90,65 @@ void UpdateWindowTitle(HWND hwnd) {
         SetWindowTextW(hwnd, title.c_str());
         return;
     }
-
-    void UpdateNameLabels(HWND hwnd) {
-        auto& app = GetState(hwnd);
-        SetWindowTextW(app.restLabel, app.restName.c_str());
-        SetWindowTextW(app.workLabel, app.workName.c_str());
-    }
-
-    void CommitNameEdit(HWND hwnd) {
-        auto& app = GetState(hwnd);
-        if (app.nameEdit == nullptr) {
-            return;
-        }
-
-        wchar_t buffer[128]{};
-        GetWindowTextW(app.nameEdit, buffer, static_cast<int>(std::size(buffer)));
-        std::wstring name = buffer;
-        if (!name.empty()) {
-            if (app.editingPhase == Phase::Work) {
-                app.workName = name;
-            } else {
-                app.restName = name;
-            }
-        }
-        DestroyWindow(app.nameEdit);
-        app.nameEdit = nullptr;
-        UpdateNameLabels(hwnd);
-        UpdateWindowTitle(hwnd);
-    }
-
-    void BeginNameEdit(HWND hwnd, Phase phase) {
-        auto& app = GetState(hwnd);
-        if (app.nameEdit != nullptr || app.state == TimerState::Running) {
-            return;
-        }
-
-        app.editingPhase = phase;
-        HWND label = phase == Phase::Work ? app.workLabel : app.restLabel;
-        RECT rect{};
-        GetWindowRect(label, &rect);
-        MapWindowPoints(nullptr, hwnd, reinterpret_cast<POINT*>(&rect), 2);
-        const std::wstring& name = phase == Phase::Work ? app.workName : app.restName;
-        app.nameEdit = CreateWindowExW(
-            WS_EX_CLIENTEDGE, L"EDIT", name.c_str(),
-            WS_CHILD | WS_VISIBLE | ES_CENTER | ES_AUTOHSCROLL,
-            rect.left, rect.top, rect.right - rect.left, rect.bottom - rect.top,
-            hwnd, reinterpret_cast<HMENU>(1008), app.instance, nullptr);
-        SendMessageW(app.nameEdit, WM_SETFONT, reinterpret_cast<WPARAM>(app.uiFont), TRUE);
-        SendMessageW(app.nameEdit, EM_SETSEL, 0, -1);
-        SetFocus(app.nameEdit);
-    }
-
     if (app.state == TimerState::AwaitingConfirm) {
         SetWindowTextW(hwnd, L"ADHD-limiter — Таймер завершен, подтвердите переход");
         return;
     }
-
     if (app.state == TimerState::Paused) {
         SetWindowTextW(hwnd, L"ADHD-limiter — Пауза");
         return;
     }
-
     SetWindowTextW(hwnd, L"ADHD-limiter");
+}
+
+void UpdateNameLabels(HWND hwnd) {
+    auto& app = GetState(hwnd);
+    SetWindowTextW(app.restLabel, app.restName.c_str());
+    SetWindowTextW(app.workLabel, app.workName.c_str());
+}
+
+void CommitNameEdit(HWND hwnd) {
+    auto& app = GetState(hwnd);
+    if (app.nameEdit == nullptr) {
+        return;
+    }
+
+    wchar_t buffer[128]{};
+    GetWindowTextW(app.nameEdit, buffer, static_cast<int>(std::size(buffer)));
+    std::wstring name = buffer;
+    if (!name.empty()) {
+        if (app.editingPhase == Phase::Work) {
+            app.workName = name;
+        } else {
+            app.restName = name;
+        }
+    }
+    DestroyWindow(app.nameEdit);
+    app.nameEdit = nullptr;
+    UpdateNameLabels(hwnd);
+    UpdateWindowTitle(hwnd);
+}
+
+void BeginNameEdit(HWND hwnd, Phase phase) {
+    auto& app = GetState(hwnd);
+    if (app.nameEdit != nullptr || app.state == TimerState::Running) {
+        return;
+    }
+
+    app.editingPhase = phase;
+    HWND label = phase == Phase::Work ? app.workLabel : app.restLabel;
+    RECT rect{};
+    GetWindowRect(label, &rect);
+    MapWindowPoints(nullptr, hwnd, reinterpret_cast<POINT*>(&rect), 2);
+    const std::wstring& name = phase == Phase::Work ? app.workName : app.restName;
+    app.nameEdit = CreateWindowExW(
+        WS_EX_CLIENTEDGE, L"EDIT", name.c_str(),
+        WS_CHILD | WS_VISIBLE | ES_CENTER | ES_AUTOHSCROLL,
+        rect.left, rect.top, rect.right - rect.left, rect.bottom - rect.top,
+        hwnd, reinterpret_cast<HMENU>(1008), app.instance, nullptr);
+    SendMessageW(app.nameEdit, WM_SETFONT, reinterpret_cast<WPARAM>(app.uiFont), TRUE);
+    SendMessageW(app.nameEdit, EM_SETSEL, 0, -1);
+    SetFocus(app.nameEdit);
 }
 
 void SetActivePhase(HWND hwnd, Phase phase) {
