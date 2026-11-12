@@ -18,9 +18,12 @@ constexpr UINT kTrayMessage = WM_APP + 1;
 constexpr UINT kTrayIconId = 1;
 constexpr UINT kTrayOpenCommand = 40001;
 constexpr UINT kTrayExitCommand = 40002;
+constexpr COLORREF kBackgroundColor = RGB(25, 25, 25);
 
 enum class TimerState { Idle, Running, Paused, AwaitingConfirm };
 enum class Phase { Work, Rest };
+
+HBRUSH hBgBrush = nullptr;
 
 struct AppState {
     HWND restEdit = nullptr;
@@ -30,6 +33,8 @@ struct AppState {
     HWND nameEdit = nullptr;
     HWND actionButton = nullptr;
     HWND resetButton = nullptr;
+    WNDPROC restEditOriginalProc = nullptr;
+    WNDPROC workEditOriginalProc = nullptr;
     WNDPROC nameEditOriginalProc = nullptr;
 
     HFONT activeNumberFont = nullptr;
@@ -60,6 +65,13 @@ AppState& GetState(HWND hwnd) {
 
 void ResizeControls(HWND hwnd, int width, int height);
 LRESULT CALLBACK NameEditProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam);
+LRESULT CALLBACK NumberEditProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam);
+
+void InvalidateTimerEdits(HWND hwnd) {
+    auto& app = GetState(hwnd);
+    InvalidateRect(app.restEdit, nullptr, TRUE);
+    InvalidateRect(app.workEdit, nullptr, TRUE);
+}
 
 void RemoveTrayIcon(HWND hwnd) {
     auto& app = GetState(hwnd);
@@ -246,6 +258,27 @@ LRESULT CALLBACK NameEditProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lPa
     return DefWindowProcW(hwnd, message, wParam, lParam);
 }
 
+LRESULT CALLBACK NumberEditProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam) {
+    HWND parent = GetParent(hwnd);
+    if (message == WM_ERASEBKGND && parent != nullptr) {
+        auto& app = GetState(parent);
+        RECT rect{};
+        GetClientRect(hwnd, &rect);
+        FillRect(reinterpret_cast<HDC>(wParam), &rect, app.backgroundBrush);
+        return 1;
+    }
+
+    if (parent != nullptr) {
+        auto& app = GetState(parent);
+        const WNDPROC original = hwnd == app.restEdit ? app.restEditOriginalProc
+                                                      : app.workEditOriginalProc;
+        if (original != nullptr) {
+            return CallWindowProcW(original, hwnd, message, wParam, lParam);
+        }
+    }
+    return DefWindowProcW(hwnd, message, wParam, lParam);
+}
+
 void SetActivePhase(HWND hwnd, Phase phase) {
     auto& app = GetState(hwnd);
     if (app.state == TimerState::Running) {
@@ -292,6 +325,7 @@ void TogglePause(HWND hwnd) {
         return;
     }
     UpdateButton(hwnd);
+    InvalidateTimerEdits(hwnd);
     UpdateWindowTitle(hwnd);
 }
 
@@ -312,6 +346,7 @@ void StartCurrentPhase(HWND hwnd) {
     ApplyEditEnabled(hwnd, FALSE);
     SetTimer(hwnd, kTimerId, 1000, nullptr);
     UpdateButton(hwnd);
+    InvalidateTimerEdits(hwnd);
     UpdateWindowTitle(hwnd);
 }
 
@@ -439,7 +474,10 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lPara
     switch (message) {
         case WM_NCCREATE: {
             auto* state = new AppState();
-            state->backgroundBrush = CreateSolidBrush(RGB(25, 25, 25));
+            if (hBgBrush == nullptr) {
+                hBgBrush = CreateSolidBrush(kBackgroundColor);
+            }
+            state->backgroundBrush = hBgBrush;
             state->instance = reinterpret_cast<LPCREATESTRUCTW>(lParam)->hInstance;
             SetWindowLongPtrW(hwnd, GWLP_USERDATA, reinterpret_cast<LONG_PTR>(state));
             return TRUE;
@@ -457,6 +495,12 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lPara
                 WS_CHILD | WS_VISIBLE | ES_CENTER | ES_AUTOHSCROLL,
                 0, 0, 0, 0, hwnd, reinterpret_cast<HMENU>(1002),
                 reinterpret_cast<LPCREATESTRUCTW>(lParam)->hInstance, nullptr);
+            app.restEditOriginalProc = reinterpret_cast<WNDPROC>(
+                SetWindowLongPtrW(app.restEdit, GWLP_WNDPROC,
+                                  reinterpret_cast<LONG_PTR>(NumberEditProc)));
+            app.workEditOriginalProc = reinterpret_cast<WNDPROC>(
+                SetWindowLongPtrW(app.workEdit, GWLP_WNDPROC,
+                                  reinterpret_cast<LONG_PTR>(NumberEditProc)));
 
             app.restLabel = CreateWindowExW(
                 0, L"STATIC", app.restName.c_str(),
@@ -600,24 +644,22 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lPara
             auto& app = GetState(hwnd);
             HDC hdc = reinterpret_cast<HDC>(wParam);
             HWND control = reinterpret_cast<HWND>(lParam);
-            SetBkMode(hdc, TRANSPARENT);
+            SetBkMode(hdc, OPAQUE);
+            SetBkColor(hdc, kBackgroundColor);
             if (control == app.restEdit) {
                 const bool inactive = app.state == TimerState::Running &&
                                       app.phase != Phase::Rest;
                 SetTextColor(hdc, inactive ? RGB(150, 150, 150) : RGB(0, 255, 0));
-                SetBkColor(hdc, RGB(25, 25, 25));
                 return reinterpret_cast<INT_PTR>(app.backgroundBrush);
             }
             if (control == app.workEdit) {
                 const bool inactive = app.state == TimerState::Running &&
                                       app.phase != Phase::Work;
                 SetTextColor(hdc, inactive ? RGB(150, 150, 150) : RGB(255, 50, 50));
-                SetBkColor(hdc, RGB(25, 25, 25));
                 return reinterpret_cast<INT_PTR>(app.backgroundBrush);
             }
             if (control == app.nameEdit) {
                 SetTextColor(hdc, RGB(255, 255, 255));
-                SetBkColor(hdc, RGB(25, 25, 25));
                 return reinterpret_cast<INT_PTR>(app.backgroundBrush);
             }
             break;
@@ -626,8 +668,8 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lPara
             auto& app = GetState(hwnd);
             HDC hdc = reinterpret_cast<HDC>(wParam);
             HWND control = reinterpret_cast<HWND>(lParam);
-            SetBkMode(hdc, TRANSPARENT);
-            SetBkColor(hdc, RGB(25, 25, 25));
+            SetBkMode(hdc, OPAQUE);
+            SetBkColor(hdc, kBackgroundColor);
             SetTextColor(hdc, RGB(200, 200, 200));
             if (control == app.restLabel || control == app.workLabel) {
                 return reinterpret_cast<INT_PTR>(app.backgroundBrush);
@@ -694,7 +736,10 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lPara
                     DeleteObject(app->uiFont);
                 }
                 if (app->backgroundBrush != nullptr) {
-                    DeleteObject(app->backgroundBrush);
+                    if (app->backgroundBrush == hBgBrush) {
+                        DeleteObject(hBgBrush);
+                        hBgBrush = nullptr;
+                    }
                 }
                 if (app->bigIcon != nullptr) {
                     DestroyIcon(app->bigIcon);
