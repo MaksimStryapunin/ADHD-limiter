@@ -738,9 +738,6 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int showCmd) {
     wc.hIcon = static_cast<HICON>(
         LoadImageW(instance, MAKEINTRESOURCEW(IDI_MAIN_ICON), IMAGE_ICON, 32, 32,
                    LR_DEFAULTCOLOR));
-    wc.hIconSm = static_cast<HICON>(
-        LoadImageW(instance, MAKEINTRESOURCEW(IDI_MAIN_ICON), IMAGE_ICON, 16, 16,
-                   LR_DEFAULTCOLOR));
     wc.lpszClassName = kClassName;
     wc.hCursor = LoadCursorW(nullptr, IDC_ARROW);
     wc.hbrBackground = reinterpret_cast<HBRUSH>(COLOR_WINDOW + 1);
