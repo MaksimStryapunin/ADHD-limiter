@@ -29,7 +29,6 @@ struct AppState {
     HWND workLabel = nullptr;
     HWND nameEdit = nullptr;
     HWND actionButton = nullptr;
-    HWND pauseButton = nullptr;
     HWND resetButton = nullptr;
     WNDPROC nameEditOriginalProc = nullptr;
 
@@ -53,7 +52,6 @@ struct AppState {
     std::wstring restName = L"Отдых";
     std::wstring workName = L"Работа";
     Phase editingPhase = Phase::Work;
-    bool cancelNameEdit = false;
 };
 
 AppState& GetState(HWND hwnd) {
@@ -131,10 +129,7 @@ void SetMinutes(HWND edit, int value) {
 
 void UpdateButton(HWND hwnd) {
     auto& app = GetState(hwnd);
-    EnableWindow(app.pauseButton, app.state == TimerState::Running ||
-                                      app.state == TimerState::Paused);
     InvalidateRect(app.actionButton, nullptr, TRUE);
-    InvalidateRect(app.pauseButton, nullptr, TRUE);
     InvalidateRect(app.resetButton, nullptr, TRUE);
 }
 
@@ -174,13 +169,6 @@ void CommitNameEdit(HWND hwnd) {
         return;
     }
 
-    if (app.cancelNameEdit) {
-        app.cancelNameEdit = false;
-        DestroyWindow(app.nameEdit);
-        app.nameEdit = nullptr;
-        return;
-    }
-
     wchar_t buffer[128]{};
     GetWindowTextW(app.nameEdit, buffer, static_cast<int>(std::size(buffer)));
     std::wstring name = buffer;
@@ -191,8 +179,9 @@ void CommitNameEdit(HWND hwnd) {
             app.restName = name;
         }
     }
-    DestroyWindow(app.nameEdit);
+    HWND edit = app.nameEdit;
     app.nameEdit = nullptr;
+    DestroyWindow(edit);
     UpdateNameLabels(hwnd);
     UpdateWindowTitle(hwnd);
 }
@@ -202,10 +191,9 @@ void CancelNameEdit(HWND hwnd) {
     if (app.nameEdit == nullptr) {
         return;
     }
-    app.cancelNameEdit = true;
-    DestroyWindow(app.nameEdit);
+    HWND edit = app.nameEdit;
     app.nameEdit = nullptr;
-    app.cancelNameEdit = false;
+    DestroyWindow(edit);
 }
 
 void BeginNameEdit(HWND hwnd, Phase phase) {
@@ -225,8 +213,8 @@ void BeginNameEdit(HWND hwnd, Phase phase) {
     const int left = (std::max)(0, labelCenter - editWidth / 2);
     app.nameEdit = CreateWindowExW(
         0, L"EDIT", name.c_str(),
-        WS_CHILD | WS_VISIBLE | ES_CENTER | ES_AUTOHSCROLL,
-        left, rect.top, editWidth, rect.bottom - rect.top,
+        WS_CHILD | WS_VISIBLE | ES_CENTER | ES_AUTOHSCROLL | ES_MULTILINE,
+        left, rect.top, editWidth, rect.bottom - rect.top + 8,
         hwnd, reinterpret_cast<HMENU>(1008), app.instance, nullptr);
     app.nameEditOriginalProc = reinterpret_cast<WNDPROC>(
         SetWindowLongPtrW(app.nameEdit, GWLP_WNDPROC,
@@ -341,8 +329,8 @@ void ResizeControls(HWND hwnd, int width, int height) {
 
     MoveWindow(app.restEdit, leftX, top, editWidth, editHeight, TRUE);
     MoveWindow(app.workEdit, rightX, top, editWidth, editHeight, TRUE);
-    MoveWindow(app.restLabel, leftX, 8, editWidth, 24, TRUE);
-    MoveWindow(app.workLabel, rightX, 8, editWidth, 24, TRUE);
+    MoveWindow(app.restLabel, leftX, 8, editWidth, 32, TRUE);
+    MoveWindow(app.workLabel, rightX, 8, editWidth, 32, TRUE);
 
     const int buttonWidth = (std::max)(52, (std::min)(68, height / 7));
     const int buttonHeight = buttonWidth;
@@ -350,11 +338,8 @@ void ResizeControls(HWND hwnd, int width, int height) {
     const int buttonY = (std::max)(top + editHeight + 24, height - buttonHeight - margin - 4);
     MoveWindow(app.actionButton, buttonX, buttonY, buttonWidth, buttonHeight, TRUE);
     const int utilitySize = (std::max)(42, (std::min)(72, height / 9));
-    const int utilityGap = 6;
     const int utilityY = height - utilitySize - margin;
     MoveWindow(app.resetButton, width - margin - utilitySize, utilityY,
-               utilitySize, utilitySize, TRUE);
-    MoveWindow(app.pauseButton, width - margin - utilitySize * 2 - utilityGap, utilityY,
                utilitySize, utilitySize, TRUE);
 
     const int activeNumberFontHeight = -(std::max)(48, (std::min)(120, editHeight * 3 / 4));
@@ -489,11 +474,6 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lPara
                 WS_CHILD | WS_VISIBLE | BS_OWNERDRAW | WS_TABSTOP,
                 0, 0, 0, 0, hwnd, reinterpret_cast<HMENU>(1003),
                 reinterpret_cast<LPCREATESTRUCTW>(lParam)->hInstance, nullptr);
-            app.pauseButton = CreateWindowExW(
-                0, L"BUTTON", L"",
-                WS_CHILD | WS_VISIBLE | BS_OWNERDRAW | WS_TABSTOP,
-                0, 0, 0, 0, hwnd, reinterpret_cast<HMENU>(1004),
-                reinterpret_cast<LPCREATESTRUCTW>(lParam)->hInstance, nullptr);
             app.resetButton = CreateWindowExW(
                 0, L"BUTTON", L"",
                 WS_CHILD | WS_VISIBLE | BS_OWNERDRAW | WS_TABSTOP,
@@ -539,11 +519,10 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lPara
                     StartCurrentPhase(hwnd);
                 } else if (app.state == TimerState::AwaitingConfirm) {
                     StartCurrentPhase(hwnd);
+                } else if (app.state == TimerState::Running ||
+                           app.state == TimerState::Paused) {
+                    TogglePause(hwnd);
                 }
-                return 0;
-            }
-            if (LOWORD(wParam) == 1004 && HIWORD(wParam) == BN_CLICKED) {
-                TogglePause(hwnd);
                 return 0;
             }
             if (LOWORD(wParam) == 1005 && HIWORD(wParam) == BN_CLICKED) {
@@ -623,15 +602,22 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lPara
             HWND control = reinterpret_cast<HWND>(lParam);
             SetBkMode(hdc, TRANSPARENT);
             if (control == app.restEdit) {
-                SetTextColor(hdc, RGB(0, 255, 0));
+                const bool inactive = app.state == TimerState::Running &&
+                                      app.phase != Phase::Rest;
+                SetTextColor(hdc, inactive ? RGB(150, 150, 150) : RGB(0, 255, 0));
+                SetBkColor(hdc, RGB(25, 25, 25));
                 return reinterpret_cast<INT_PTR>(app.backgroundBrush);
             }
             if (control == app.workEdit) {
-                SetTextColor(hdc, RGB(255, 50, 50));
+                const bool inactive = app.state == TimerState::Running &&
+                                      app.phase != Phase::Work;
+                SetTextColor(hdc, inactive ? RGB(150, 150, 150) : RGB(255, 50, 50));
+                SetBkColor(hdc, RGB(25, 25, 25));
                 return reinterpret_cast<INT_PTR>(app.backgroundBrush);
             }
             if (control == app.nameEdit) {
                 SetTextColor(hdc, RGB(255, 255, 255));
+                SetBkColor(hdc, RGB(25, 25, 25));
                 return reinterpret_cast<INT_PTR>(app.backgroundBrush);
             }
             break;
@@ -641,6 +627,7 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lPara
             HDC hdc = reinterpret_cast<HDC>(wParam);
             HWND control = reinterpret_cast<HWND>(lParam);
             SetBkMode(hdc, TRANSPARENT);
+            SetBkColor(hdc, RGB(25, 25, 25));
             SetTextColor(hdc, RGB(200, 200, 200));
             if (control == app.restLabel || control == app.workLabel) {
                 return reinterpret_cast<INT_PTR>(app.backgroundBrush);
@@ -668,9 +655,7 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lPara
             FrameRect(draw->hDC, &rect, borderBrush);
             DeleteObject(borderBrush);
             auto& app = GetState(hwnd);
-            DrawButtonIcon(draw->hDC, rect, draw->CtlID,
-                           (draw->CtlID == 1003 && app.state == TimerState::Running) ||
-                               (draw->CtlID == 1004 && app.state != TimerState::Paused));
+            DrawButtonIcon(draw->hDC, rect, draw->CtlID, app.state == TimerState::Running);
             return TRUE;
         }
         case WM_ERASEBKGND: {
