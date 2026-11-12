@@ -731,9 +731,7 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lPara
             SetBkMode(hdc, TRANSPARENT);
             for (const Phase phase : {Phase::Rest, Phase::Work}) {
                 RECT timerRect = GetTimerRect(hwnd, phase);
-                const bool active = app.state == TimerState::Running
-                                        ? app.phase == phase
-                                        : app.selectedPhase == phase;
+                const bool active = app.state != TimerState::Running || app.phase == phase;
                 const COLORREF color = active
                                            ? (phase == Phase::Rest ? RGB(0, 255, 0)
                                                                    : RGB(255, 50, 50))
