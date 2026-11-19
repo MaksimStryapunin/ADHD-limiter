@@ -78,8 +78,10 @@ jobs:
           name: ADHD-limiter ${{ github.ref_name }}
           prerelease: ${{ endsWith(github.ref_name, '-beta') }}
           body: |
-            Removed native controls for timer digits to completely fix white boxes (now drawn via GDI),
-            increased name character limit to 16, Reset now resets names, fixed tray exit process leak.
+            Бета-релиз версии 4.2.0:
+            - Число оставшихся секунд и минут обновляется на экране каждую секунду после запуска таймера.
+            - На стартовом экране выбранный таймер работы или отдыха выделяется крупным шрифтом.
+            - Добавлена перерисовка секундного тика без закрытия и повторного открытия приложения.
           files: artifacts/*
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
